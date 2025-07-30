@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Juego 3D Plataformas - Cámara Móvil</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin: 0; overflow: hidden; background: #222; }
+    canvas { display: block; }
+
+    #mensaje {
+      position: absolute;
+      top: 20px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 20px 40px;
+      border-radius: 12px;
+      font-family: sans-serif;
+      font-size: 2.5em;
+      font-weight: bold;
+      z-index: 10;
+      user-select: none;
+    }
+
+    #vidas {
+      position: absolute;
+      top: 90px; left: 50%;
+      transform: translateX(-50%);
+      color: white;
+      font-family: sans-serif;
+      font-size: 1.8em;
+      font-weight: bold;
+      z-index: 10;
+      user-select: none;
+    }
+
+    #victoria, #final {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: #00ff00;
+      font-family: monospace, sans-serif;
+      font-size: 3em;
+      font-weight: bold;
+      z-index: 20;
+      display: none;
+      user-select: none;
+      text-align: center;
+      padding: 20px;
+      background: rgba(0,0,0,0.8);
+      border-radius: 20px;
+      max-width: 90vw;
+    }
+
+    #joystick {
+      position: absolute;
+      bottom: 20px; left: 20px;
+      width: 80px; height: 80px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 50%;
+      touch-action: none;
+      z-index: 5;
+    }
+
+    #botonDisparar {
+      position: absolute;
+      bottom: 40px; right: 40px;
+      width: 60px; height: 60px;
+      background: rgba(255,0,0,0.6);
+      border-radius: 50%;
+      touch-action: none;
+      z-index: 5;
+      user-select: none;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      font-weight: bold;
+      font-size: 1.2em;
+      cursor: pointer;
+      user-select:none;
+    }
+  </style>
+</head>
+<body>
+  <div id="mensaje">Hola Karim, bienvenido a mi juego</div>
+  <div id="vidas">Vidas: 3</div>
+  <div id="victoria">¡Victoria! Nivel completado.</div>
+  <div id="final">Por fin ganas algo fracasado jeje</div>
+  <div id="joystick"></div>
+  <div id="botonDisparar">Disparar</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+  <script>
+    // --- Setup básico ---
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Luz
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    light.position.set(5, 10, 7.5);
+    scene.add(light);
+
+    // Suelo
+    let suelo;
+    function crearSuelo(color) {
+      if (suelo) scene.remove(suelo);
+      suelo = new THREE.Mesh(
+        new THREE.BoxGeometry(20, 1, 20),
+        new THREE.MeshStandardMaterial({color})
+      );
+      suelo.position.y = -0.5;
+      scene.add(suelo);
+    }
+
+    // Jugador
+    const jugador = new THREE.Mesh(
+      new THREE.BoxGeometry(1,1,1),
+      new THREE.MeshStandardMaterial({color: 0xff0000})
+    );
+    jugador.position.set(0, 0.5, 0);
+    scene.add(jugador);
+
+    // Variables control jugador
+    const movimiento = {izq:false, der:false, arr:false, aba:false};
+    const velocidad = 0.15;
+
+    let vidas = 3;
+    const vidasTexto = document.getElementById("vidas");
+    const mensaje = document.getElementById("mensaje");
+    const victoria = document.getElementById("victoria");
+    const final = document.getElementById("final");
+
+    // Disparos
+    const disparosJugador = [];
+    const disparosEnemigos = [];
+
+    // Enemigos y nivel
+    let enemigos = [];
+    let nivel = 1;
+    let nivelActivo = true;
+
+    // --- Cámara móvil variables ---
+    let camDistancia = 10;
+    let camAnguloHorizontal = 0; // alrededor eje Y
+    let camAnguloVertical = 0.4; // ángulo arriba/abajo (radianes)
+    let arrastrando = false;
+    let mousePrev = {x:0,y:0};
+
+    // --- Funciones útiles ---
+
+    function actualizarCamara() {
+      // Calcular posición cámara en coordenadas esféricas
+      const x = jugador.position.x + camDistancia * Math.cos(camAnguloVertical) * Math.sin(camAnguloHorizontal);
+      const y = jugador.position.y + camDistancia * Math.sin(camAnguloVertical);
+      const z = jugador.position.z + camDistancia * Math.cos(camAnguloVertical) * Math.cos(camAnguloHorizontal);
+
+      camera.position.set(x, y, z);
+      camera.lookAt(jugador.position);
+    }
+
+    function crearDisparo(pos, dir, color=0xffff00) {
+      const bala = new THREE.Mesh(
+        new THREE.SphereGeometry(0.15, 8, 8),
+        new THREE.MeshStandardMaterial({color})
+      );
+      bala.position.copy(pos);
+      bala.userData = {dir};
+      scene.add(bala);
+      return bala;
+    }
+
+    function colision(bala, objeto) {
+      return bala.position.distanceTo(objeto.position) < 0.75;
+    }
+
+    function actualizarVidas() {
+      vidasTexto.textContent = `Vidas: ${vidas}`;
+      if (vidas <= 0) {
+        alert("Has perdido todas las vidas. Recarga para jugar otra vez.");
+        window.location.reload();
+      }
+    }
+
+    function crearEnemigo(color, posX, posZ) {
+      const malla = new THREE.Mesh(
+        new THREE.BoxGeometry(1,1,1),
+        new THREE.MeshStandardMaterial({color})
+      );
+      malla.position.set(posX, 0.5, posZ);
+      scene.add(malla);
+      return {
+        mesh: malla,
+        vivo: true,
+        vidas: 2,
+        velocidad: 0.03 + Math.random()*0.02,
+        dir: new THREE.Vector3(Math.random()*2-1, 0, Math.random()*2-1).normalize(),
+        tiempoDisparo: 0
+      };
+    }
+
+    function reiniciarJugador() {
+      jugador.position.set(0, 0.5, 0);
+      vidas = 3;
+      actualizarVidas();
+    }
+
+    function iniciarNivel1() {
+      nivelActivo = true;
+      crearSuelo(0x00cc00);
+      reiniciarJugador();
+      enemigos.forEach(e => scene.remove(e.mesh));
+      enemigos = [];
+      enemigos.push(crearEnemigo(0x0000ff, 5, 0));
+      enemigos.push(crearEnemigo(0x000000, -5, 0));
+      victoria.style.display = "none";
+      final.style.display = "none";
+      mensaje.style.display = "block";
+      mensaje.textContent = "Hola Karim, bienvenido a mi juego";
+      setTimeout(() => { mensaje.style.display = "none"; }, 3000);
+    }
+
+    function iniciarNivel2() {
+      nivelActivo = true;
+      const coloresSuelo = [0x663300, 0x004466, 0x444400, 0x550055];
+      const colorSuelo = coloresSuelo[Math.floor(Math.random()*coloresSuelo.length)];
+      crearSuelo(colorSuelo);
+      reiniciarJugador();
+      enemigos.forEach(e => scene.remove(e.mesh));
+      enemigos = [];
+      enemigos.push(crearEnemigo(0x0000ff, 5, 5));
+      enemigos.push(crearEnemigo(0x000000, -5, 5));
+      enemigos.push(crearEnemigo(0x00ff00, 5, -5));
+      enemigos.push(crearEnemigo(0xffa500, -5, -5));
+      victoria.style.display = "none";
+      final.style.display = "none";
+      mensaje.style.display = "block";
+      mensaje.textContent = "Nivel 2: ¡Más difícil!";
+      setTimeout(() => { mensaje.style.display = "none"; }, 3000);
+    }
+
+    function dispararJugador() {
+      if(!nivelActivo) return;
+      const pos = jugador.position.clone();
+      pos.y += 0.5;
+      const dir = new THREE.Vector3(0,0,-1);
+      disparosJugador.push(crearDisparo(pos, dir, 0xffff00));
+    }
+
+    function dispararEnemigo(enemigo) {
+      if(!nivelActivo) return;
+      const pos = enemigo.mesh.position.clone();
+      pos.y += 0.5;
+      const dir = jugador.position.clone().sub(pos).normalize();
+      disparosEnemigos.push(crearDisparo(pos, dir, 0xff00ff));
+    }
+
+    // --- Eventos controles ---
+
+    document.addEventListener('keydown', e => {
+      if(e.key === 'ArrowLeft' || e.key === 'a') movimiento.izq = true;
+      if(e.key === 'ArrowRight' || e.key === 'd') movimiento.der = true;
+      if(e.key === 'ArrowUp' || e.key === 'w') movimiento.arr = true;
+      if(e.key === 'ArrowDown' || e.key === 's') movimiento.aba = true;
+      if(e.key.toLowerCase() === 'r') {
+        nivel = 1;
+        iniciarNivel1();
+      }
+    });
+    document.addEventListener('keyup', e => {
+      if(e.key === 'ArrowLeft' || e.key === 'a') movimiento.izq = false;
+      if(e.key === 'ArrowRight' || e.key === 'd') movimiento.der = false;
+      if(e.key === 'ArrowUp' || e.key === 'w') movimiento.arr = false;
+      if(e.key === 'ArrowDown' || e.key === 's') movimiento.aba = false;
+    });
+
+    window.addEventListener('click', () => {
+      dispararJugador();
+    });
+
+    const botonDisparar = document.getElementById("botonDisparar");
+    botonDisparar.addEventListener("touchstart", e => {
+      e.preventDefault();
+      dispararJugador();
+    });
+
+    const joystick = document.getElementById("joystick");
+    let touchStart = null;
+    joystick.addEventListener("touchstart", e => {
+      touchStart = e.touches[0];
+    });
+    joystick.addEventListener("touchmove", e => {
+      let dx = e.touches[0].clientX - touchStart.clientX;
+      let dy = e.touches[0].clientY - touchStart.clientY;
+      movimiento.izq = dx < -20;
+      movimiento.der = dx > 20;
+      movimiento.arr = dy < -20;
+      movimiento.aba = dy > 20;
+    });
+    joystick.addEventListener("touchend", () => {
+      movimiento.izq = false;
+      movimiento.der = false;
+      movimiento.arr = false;
+      movimiento.aba = false;
+    });
+
+    // --- Control cámara con mouse ---
+
+    renderer.domElement.addEventListener('mousedown', e => {
+      if(e.button === 0) { // botón izquierdo
+        arrastrando = true;
+        mousePrev.x = e.clientX;
+        mousePrev.y = e.clientY;
+      }
+    });
+    window.addEventListener('mouseup', e => {
+      if(e.button === 0) arrastrando = false;
+    });
+    window.addEventListener('mousemove', e => {
+      if(arrastrando) {
+        const sensibilidad = 0.005;
+        const dx = e.clientX - mousePrev.x;
+        const dy = e.clientY - mousePrev.y;
+        camAnguloHorizontal -= dx * sensibilidad;
+        camAnguloVertical -= dy * sensibilidad;
+
+        // Limitar vertical para no girar muy arriba o abajo
+        const maxVertical = Math.PI/2 - 0.1;
+        const minVertical = -0.1;
+        camAnguloVertical = Math.min(maxVertical, Math.max(minVertical, camAnguloVertical));
+
+        mousePrev.x = e.clientX;
+        mousePrev.y = e.clientY;
+      }
+    });
+
+    // Zoom con rueda ratón
+    renderer.domElement.addEventListener('wheel', e => {
+      e.preventDefault();
+      camDistancia += e.deltaY * 0.01;
+      camDistancia = Math.min(Math.max(camDistancia, 5), 30);
+    }, { passive: false });
+
+    // --- Loop principal ---
+    let tiempoAnterior = 0;
+    function animar(tiempo=0) {
+      requestAnimationFrame(animar);
+
+      if(!nivelActivo) {
+        renderer.render(scene, camera);
+        return;
+      }
+
+      const delta = (tiempo - tiempoAnterior)/1000;
+      tiempoAnterior = tiempo;
+
+      // Mover jugador
+      if(movimiento.izq) jugador.position.x -= velocidad;
+      if(movimiento.der) jugador.position.x += velocidad;
+      if(movimiento.arr) jugador.position.z -= velocidad;
+      if(movimiento.aba) jugador.position.z += velocidad;
+
+      jugador.position.x = THREE.MathUtils.clamp(jugador.position.x, -9.5, 9.5);
+      jugador.position.z = THREE.MathUtils.clamp(jugador.position.z, -9.5, 9.5);
+
+      // Mover enemigos
+      enemigos.forEach(enemigo => {
+        if(!enemigo.vivo) return;
+
+        enemigo.mesh.position.addScaledVector(enemigo.dir, enemigo.velocidad);
+
+        if(enemigo.mesh.position.x > 9 || enemigo.mesh.position.x < -9) enemigo.dir.x *= -1;
+        if(enemigo.mesh.position.z > 9 || enemigo.mesh.position.z < -9) enemigo.dir.z *= -1;
+
+        enemigo.dir.x += (Math.random()-0.5)*0.02;
+        enemigo.dir.z += (Math.random()-0.5)*0.02;
+        enemigo.dir.y = 0;
+        enemigo.dir.normalize();
+
+        enemigo.tiempoDisparo += delta * 1000;
+        if(enemigo.tiempoDisparo > 2000) {
+          dispararEnemigo(enemigo);
+          enemigo.tiempoDisparo = 0;
+        }
+      });
+
+      // Actualizar disparos jugador
+      for(let i = disparosJugador.length - 1; i >= 0; i--) {
+        const bala = disparosJugador[i];
+        bala.position.addScaledVector(bala.userData.dir, 0.4);
+
+        enemigos.forEach(enemigo => {
+          if(enemigo.vivo && colision(bala, enemigo.mesh)) {
+            enemigo.vidas--;
+            scene.remove(bala);
+            disparosJugador.splice(i,1);
+            if(enemigo.vidas <= 0) {
+              enemigo.vivo = false;
+              scene.remove(enemigo.mesh);
+            }
+          }
+        });
+
+        if(Math.abs(bala.position.x) > 30 || Math.abs(bala.position.z) > 30) {
+          scene.remove(bala);
+          disparosJugador.splice(i,1);
+        }
+      }
+
+      // Actualizar disparos enemigos
+      for(let i = disparosEnemigos.length - 1; i >= 0; i--) {
+        const bala = disparosEnemigos[i];
+        bala.position.addScaledVector(bala.userData.dir, 0.35);
+
+        if(colision(bala, jugador)) {
+          vidas--;
+          actualizarVidas();
+          scene.remove(bala);
+          disparosEnemigos.splice(i,1);
+          if(vidas <= 0) nivelActivo = false;
+        }
+
+        if(Math.abs(bala.position.x) > 30 || Math.abs(bala.position.z) > 30) {
+          scene.remove(bala);
+          disparosEnemigos.splice(i,1);
+        }
+      }
+
+      // Actualizar cámara según control
+      actualizarCamara();
+
+      // Comprobar victoria nivel
+      if(nivelActivo && enemigos.every(e => !e.vivo)) {
+        nivelActivo = false;
+        if(nivel === 1) {
+          victoria.style.display = "block";
+          setTimeout(() => {
+            victoria.style.display = "none";
+            nivel = 2;
+            iniciarNivel2();
+          }, 3000);
+        } else if (nivel === 2) {
+          final.style.display = "block";
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    // --- Inicio ---
+    actualizarVidas();
+    iniciarNivel1();
+    animar();
+
+    setTimeout(() => {
+      mensaje.style.display = "none";
+    }, 3000);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
